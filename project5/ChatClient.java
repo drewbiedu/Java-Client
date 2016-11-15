@@ -23,9 +23,8 @@ import java.util.Scanner;
 
 
 public class ChatClient {
-	InputStream inStream;
-	OutputStream outStream;
-	PrintWriter out;
+	private static PrintWriter out;
+	private static String user;
 
 	/**
 	 * Desc: main function
@@ -33,48 +32,67 @@ public class ChatClient {
 	 * @return: void
 	 */
 	public static void main(String[] args) {
-		String username = "Anonymous";
+		user = "Anonymous";
 		int port = 4688;
 
 		try {
 			if(args.length > 0) {
-				username = args[0];
+				user = args[0];
 
 				if(args.length > 1)
 					port = Integer.parseInt(args[1]);
 			}
-		}
+		}// end try block
 		catch(Exception e) {
-			System.out.println(e.printStackTrace());
 			System.exit(0);
-		}
+		}// end catch block
 
 		// build the GUI
 		EventQueue.invokeLater(new Runnable() {
 			public void run() {
-				JFrame frame = new MainFrame();
+				JFrame frame = new MainFrame(out, user);
 				frame.setTitle("Project 5 - Chat Client");
 				frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-				//frame.setVisible(true);
 			}// end run()
-		});// end EventQueue
+		});// end EventQueue thread
 
-		// start the chat client
+		Thread t = new ChatSocket(out, user, port);
+		t.start();
+	}// end main(...)
+}// end class JIMachine
+
+
+class ChatSocket extends Thread implements Runnable {
+	InputStream inStream;
+	OutputStream outStream;
+	String username;
+	int port;
+
+	public ChatSocket(PrintWriter out, String username, int port) {
+		this.username = username;
+	}// end ChatSocket(...)
+
+	public void run() {
 		try (Socket s = new Socket("localhost", port)) {
 			inStream = s.getInputStream();
 			outStream = s.getOutputStream();
 			Scanner in = new Scanner(inStream);
 
-			// PrintWriter to write to the socket
-			out = new PrintWriter(outStream, true);
+			PrintWriter out = new PrintWriter(outStream, true);
+			out.println("connect " + username);
+			// chatGUI.SendListener(out);
+			// out.println("hello");
 
 			while(in.hasNextLine()) {
 				String line = in.nextLine();
-				System.out.println(line);
+				System.out.println(username + " " + line);	
 			}// end while-loop
 		}// end try block
-	}// end main(...)
-}// end class JIMachine
+		catch(IOException e) {
+			// chatGUI.printError("The server has closed: " + e);
+		}// end catch block
+	}// end run()
+}// end class ChatSocket
 
 
 class MainFrame extends JFrame {
@@ -86,16 +104,20 @@ class MainFrame extends JFrame {
 	private JTextArea display;
 	private JTextArea errorLog;
 	private JTextArea message;
+	private PrintWriter out;
+	private String username;
 
 	int defaultRows = 10;
 	int defaultCols = 45;
 
 	/**
 	 * Desc: default constructor for MainFrame
-	 * @param: none
+	 * @param: PrintWriter pWriter
 	 * @return: nothing
 	 */
-	public MainFrame() {
+	public MainFrame(PrintWriter pWriter, String username) {
+		this.out = pWriter;
+		this.username = username;
 		// event listeners
 		ClearLogListener clearLogCommand = new ClearLogListener();
 		SendListener sendCommand = new SendListener();
@@ -183,6 +205,16 @@ class MainFrame extends JFrame {
 
 
 	/**
+	 * Desc: getter for out
+	 * @param: none
+	 * @return: PrintWriter
+	 */
+	public PrintWriter getOut() {
+		return out;
+	}// end getOut()
+
+
+	/**
 	 * Desc: adds a button to the MainFrame panel
 	 * @param: String label, ActionListener listener
 	 * @return: void
@@ -221,7 +253,20 @@ class MainFrame extends JFrame {
 			serverStatus.setForeground(Color.GREEN);
 			serverStatus.setText("Connected");
 		}
-	}// end updateServerStatus(...)	
+	}// end updateServerStatus(...)
+
+
+	/**
+	 * Desc: prints the client message to the screen
+	 * @param: PrintWriter pWriter String status
+	 * @return: void
+	 */
+	public synchronized void printMessage(PrintWriter pWriter, String message) {
+		if(pWriter != null)
+			pWriter.println(username + message);
+		else
+			errorLog.setText("pWriter is NULL");
+	}// end printMessage(...)
 
 
 	private class ClearLogListener implements ActionListener {
@@ -249,10 +294,10 @@ class MainFrame extends JFrame {
 			if(currentMessage.equals("")) {
 				printError("Cannot send blank message!");
 			}
-
-			// ************************* temporary ************************* //
-			updateServerStatus("connect");
-			// ************************* temporary ************************* //
+			else {
+				// send message to the PrintWriter
+				printMessage(getOut(), currentMessage);
+			}
 
 			// clear the message field
 			message.setText("");
@@ -261,7 +306,7 @@ class MainFrame extends JFrame {
 			message.requestFocusInWindow();
 			return;
 		}// end actionPerformed(ActionEvent event)
-	}// end class OpenListener
+	}// end class SendListener
 
 
 	private class DisconnectListener implements ActionListener {
