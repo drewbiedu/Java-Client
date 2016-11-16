@@ -12,27 +12,159 @@
  * poor academic performance if I am found in violation of this policy.
  */
 
-import java.awt.*;
-import java.awt.event.*;
-import java.io.*;
-import java.net.*;
-import javax.swing.*;
-import javax.swing.border.*;
-import java.util.*;
-import java.util.Scanner;
+import java.awt.EventQueue;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import javax.swing.JFrame;
+
+
+interface MessageReceivedListener {
+	void messageReceived(String msg);
+}// end MessageReceivedListener
+
+
+class ConsoleListener implements MessageReceivedListener {
+	@Override
+	public void messageReceived(String msg) {
+		System.out.println("Message Recieved: " + msg);
+	}// end messageReceived
+}// end ConsoleListener
 
 
 public class ChatClient {
-	private static PrintWriter out;
-	private static String user;
+	private String user = "Anonymous";
+	private String host = "localhost";
+	private int port = 4688;	
+	private List<MessageReceivedListener> listeners;	
+	//Don't buffer any more than 10 messages at a time.
+	private ArrayBlockingQueue<String> queue = new ArrayBlockingQueue<String>(10);
+	private ChatSocket socket;
+
+	ExecutorService pool = Executors.newFixedThreadPool(1);
+
+
+	public ChatClient() throws UnknownHostException, IOException {
+		listeners = new ArrayList<MessageReceivedListener>();
+		socket = new ChatSocket();
+	}// end ChatClient()
+
+		
+	public ChatClient(String username, int portNum) throws UnknownHostException, IOException {
+		this();
+		user = username;
+		port = portNum;
+	}// end ChatClient(String username, int portNum)
+
+	
+	public void addReceivedListener(MessageReceivedListener listener) {
+		listeners.add(listener);
+	}// end addReceivedListener(...)
+
+	
+	public void connect() {
+		pool.submit(socket);
+	}// end connect()
+
+	
+	public boolean isConnected() {
+		return socket.isConnected();
+	}// end isConnected()
+
+
+	public void disconnect() throws InterruptedException {
+		queue.offer("BYE");
+		pool.shutdown();
+		socket.disconnect();
+		pool.awaitTermination(5, TimeUnit.SECONDS);
+	}// end disconnect()
+
+	
+	public synchronized void writeMessage(String message) throws IOException {
+		//System.out.println(message);
+		queue.offer(message);
+	}// end writeMessage(String message)
+
+		
+	class ChatSocket extends Thread implements Runnable {
+		boolean disconnect = false;
+		Socket so;
+		
+		public ChatSocket() {
+
+		}// end ChatSocket()
+		
+		private synchronized void disconnect() {
+			disconnect = true;
+		}// end disconnect()
+		
+		private synchronized boolean isConnected() {
+			if (so == null || so.isClosed()) {
+				return false;
+			}
+			return true;
+		}// end isConnected()
+
+
+		@Override
+		public void run() {
+			try {
+				so = new Socket("localhost", port);
+				BufferedReader in = new BufferedReader(new InputStreamReader(so.getInputStream()));
+	            PrintWriter writer = new PrintWriter(so.getOutputStream(), true);
+				
+				while (!disconnect) {
+					
+					String message = queue.poll();
+					if (message != null) {
+						writer.println(message);
+					}
+					
+					String line = in.readLine();
+					if (line != null) {
+						for(MessageReceivedListener listener : listeners) {
+							listener.messageReceived(line);
+						}
+					}
+				}// end while-loop
+				writer.println("Disconnecting from server... ... ...");
+				
+				// check if there are any messages remaining in the message queue
+				if (queue.size() > 0) {
+					System.out.println("Some messages were not delivered!");
+				}
+
+				writer.println("Disconnected");
+				so.close();
+			}// end try block
+			catch (IOException e) {
+				e.printStackTrace();
+			}// end catch block
+		}// end run()
+	}// end class ChatSocket
+
 
 	/**
 	 * Desc: main function
+	 * 
 	 * @param: String[] args
 	 * @return: void
+	 * @throws IOException 
+	 * @throws UnknownHostException 
+	 * @throws InterruptedException 
 	 */
-	public static void main(String[] args) {
-		user = "Anonymous";
+	public static void main(String[] args) throws UnknownHostException, IOException, InterruptedException {
+		String user = "Anonymous";
 		int port = 4688;
 
 		try {
@@ -47,292 +179,25 @@ public class ChatClient {
 			System.exit(0);
 		}// end catch block
 
-		// build the GUI
+		final String tempUser = user;
+		final int tempPort = port;
+
+		//final ChatClient c = new ChatClient();
 		EventQueue.invokeLater(new Runnable() {
+			@Override
 			public void run() {
-				JFrame frame = new MainFrame(out, user);
-				frame.setTitle("Project 5 - Chat Client");
-				frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+				try {
+					ChatClient c = new ChatClient(tempUser, tempPort);
+					JFrame frame = new MainFrame(c);
+					frame.setTitle("Project 5 - Chat Client");
+					frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+					c.connect();
+				}// end try block
+				catch (Exception e) {
+					e.printStackTrace();
+					System.exit(0);
+				}// end catch block				
 			}// end run()
 		});// end EventQueue thread
-
-		Thread t = new ChatSocket(out, user, port);
-		t.start();
-	}// end main(...)
-}// end class JIMachine
-
-
-class ChatSocket extends Thread implements Runnable {
-	InputStream inStream;
-	OutputStream outStream;
-	String username;
-	int port;
-
-	public ChatSocket(PrintWriter out, String username, int port) {
-		this.username = username;
-	}// end ChatSocket(...)
-
-	public void run() {
-		try (Socket s = new Socket("localhost", port)) {
-			inStream = s.getInputStream();
-			outStream = s.getOutputStream();
-			Scanner in = new Scanner(inStream);
-
-			PrintWriter out = new PrintWriter(outStream, true);
-			out.println("connect " + username);
-			// chatGUI.SendListener(out);
-			// out.println("hello");
-
-			while(in.hasNextLine()) {
-				String line = in.nextLine();
-				System.out.println(username + " " + line);	
-			}// end while-loop
-		}// end try block
-		catch(IOException e) {
-			// chatGUI.printError("The server has closed: " + e);
-		}// end catch block
-	}// end run()
-}// end class ChatSocket
-
-
-class MainFrame extends JFrame {
-	private JLabel serverStatus;
-	private JLabel serverStatusLabel;
-	private JPanel buttonPanel;
-	private JPanel errorPanel;
-	private JPanel textPanel;
-	private JTextArea display;
-	private JTextArea errorLog;
-	private JTextArea message;
-	private PrintWriter out;
-	private String username;
-
-	int defaultRows = 10;
-	int defaultCols = 45;
-
-	/**
-	 * Desc: default constructor for MainFrame
-	 * @param: PrintWriter pWriter
-	 * @return: nothing
-	 */
-	public MainFrame(PrintWriter pWriter, String username) {
-		this.out = pWriter;
-		this.username = username;
-		// event listeners
-		ClearLogListener clearLogCommand = new ClearLogListener();
-		SendListener sendCommand = new SendListener();
-		DisconnectListener disconnectCommand = new DisconnectListener();
- 		CloseListener closeCommand = new CloseListener();
-
-		Toolkit kit = Toolkit.getDefaultToolkit();
- 		Dimension screenSize = kit.getScreenSize();
-
- 		// set the dimensions and location of the GUI
- 		setSize(screenSize.width / 2, screenSize.height / 2);
- 		//setLocationByPlatform(true);
- 		setLocationRelativeTo(null);
-
-
- 		// ------------------------- errorPanel ------------------------- //
- 		errorPanel = new JPanel();
- 		errorPanel.setBorder(new TitledBorder(new EtchedBorder(), "Error Log"));
- 		errorPanel.setLayout(new BoxLayout(errorPanel, BoxLayout.Y_AXIS));
-
- 		// create the error log text area
- 		errorLog = new JTextArea(10, 20);
- 		errorLog.setLineWrap(true);
- 		errorLog.setWrapStyleWord(true);
- 		errorLog.setEditable(false);
- 		JScrollPane errorScroll = new JScrollPane(errorLog);
- 		// add the error scroll to errorPanel
- 		errorPanel.add(errorScroll);
-
- 		// add clear button
- 		JButton clearButton = new JButton("Clear Log");
- 		clearButton.addActionListener(clearLogCommand);
- 		clearButton.setAlignmentX(Component.CENTER_ALIGNMENT);
- 		errorPanel.add(clearButton);
- 		add(errorPanel, BorderLayout.WEST);
-
- 		
- 		// ------------------------- textPanel ------------------------- //
- 		textPanel = new JPanel();
- 		textPanel.setBorder(new TitledBorder(new EtchedBorder(), "Chat ChatClient"));
- 		// textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
-
- 		// message display
- 		display = new JTextArea(defaultRows, defaultCols);
- 		display.setEditable(false);
- 		JScrollPane displayScroll = new JScrollPane(display);
- 		// add the display scroll to textPanel
- 		textPanel.add(displayScroll);
-
- 		// server status
- 		serverStatusLabel = new JLabel("Server status: ", JLabel.CENTER);
- 		textPanel.add(serverStatusLabel);
- 		serverStatus = new JLabel("Connected");
- 		serverStatus.setForeground(Color.GREEN);
- 		textPanel.add(serverStatus);
-
- 		// user message
- 		message = new JTextArea(4, defaultCols);
- 		message.setEditable(true);
- 		JScrollPane messageScroll = new JScrollPane(message);
- 		// add the message scroll to textPanel
- 		textPanel.add(messageScroll);
-
-
- 		// add textPanel to MainFrame
- 		add(textPanel, BorderLayout.CENTER);
-
-
- 		// ------------------------- buttonPanel ------------------------- //
- 		buttonPanel = new JPanel();
-
-		// create menu buttons
-		addButton("Send", sendCommand);
- 		addButton("Disconnect", disconnectCommand);
- 		addButton("Quit", closeCommand);
-
-		add(buttonPanel, BorderLayout.SOUTH);
-
-		// make the frame visible
-		setVisible(true);
-
-		// set focus to the message text area
-		message.requestFocusInWindow();
-	}// end MainFrame()
-
-
-	/**
-	 * Desc: getter for out
-	 * @param: none
-	 * @return: PrintWriter
-	 */
-	public PrintWriter getOut() {
-		return out;
-	}// end getOut()
-
-
-	/**
-	 * Desc: adds a button to the MainFrame panel
-	 * @param: String label, ActionListener listener
-	 * @return: void
-	 */
-	private void addButton(String label, ActionListener listener) {
-		JButton button = new JButton(label);
-		button.addActionListener(listener);
-		buttonPanel.add(button);
-	}// end addButton(...)
-
-
-	/**
-	 * Desc: adds a button to the MainFrame panel
-	 * @param: String error
-	 * @return: void
-	 */
-	private void printError(String error) {
-		String separator = "---------------------------------------------------\n";
-		
-		errorLog.append(error + "\n");
-		errorLog.append(separator);
-	}// end printError(...)
-
-
-	/**
-	 * Desc: updates the server status text
-	 * @param: String status
-	 * @return: void
-	 */
-	private void updateServerStatus(String status) {
-		if(status.equals("disconnect")) {
-			serverStatus.setForeground(Color.RED);
-			serverStatus.setText("Disconnected");
-		}
-		else if(status.equals("connect")) {
-			serverStatus.setForeground(Color.GREEN);
-			serverStatus.setText("Connected");
-		}
-	}// end updateServerStatus(...)
-
-
-	/**
-	 * Desc: prints the client message to the screen
-	 * @param: PrintWriter pWriter String status
-	 * @return: void
-	 */
-	public synchronized void printMessage(PrintWriter pWriter, String message) {
-		if(pWriter != null)
-			pWriter.println(username + message);
-		else
-			errorLog.setText("pWriter is NULL");
-	}// end printMessage(...)
-
-
-	private class ClearLogListener implements ActionListener {
-		/**
-		 * Desc: clears the error log
-		 * @param: ActionEvent e
-		 * @return: void
-		 */
-		public void actionPerformed(ActionEvent e) {
-			errorLog.setText("");
-		}// end actionPerformed(ActionEvent e)
-	}// end class ClearListener
-
-
-	private class SendListener implements ActionListener {
-		/**
-		 * Desc: sends the message across the chat server
-		 * @param: ActionEvent event
-		 * @return: void
-		 */
-		public void actionPerformed(ActionEvent event) {
-			String currentMessage = message.getText();
-
-			// check for valid message
-			if(currentMessage.equals("")) {
-				printError("Cannot send blank message!");
-			}
-			else {
-				// send message to the PrintWriter
-				printMessage(getOut(), currentMessage);
-			}
-
-			// clear the message field
-			message.setText("");
-
-			// set focus back to the message text area
-			message.requestFocusInWindow();
-			return;
-		}// end actionPerformed(ActionEvent event)
-	}// end class SendListener
-
-
-	private class DisconnectListener implements ActionListener {
-		/**
-		 * Desc: disconnects the user from the chat server
-		 * @param: ActionEvent e
-		 * @return: void
-		 */
-		public void actionPerformed(ActionEvent e) {
-			if(serverStatus.getText().equals("Disconnected"))
-				printError("You are currently not connected to a server - please try connecting first");
-
-			updateServerStatus("disconnect");
-		}// end actionPerformed(ActionEvent e)
-	}// end class DisconnectListener
-
-
-	private class CloseListener implements ActionListener {
-		/**
-		 * Desc: exits the GUI
-		 * @param: ActionEvent e
-		 * @return: void
-		 */
-		@Override
-		public void actionPerformed(ActionEvent e) {
-			System.exit(0);
-		}// end actionPerformed(ActionEvent e)
-	}// end class CloseListener
-}// end class MainFrame
+	}// end main(String[] args)
+}// end class ChatClient
